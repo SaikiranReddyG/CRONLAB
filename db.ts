@@ -195,6 +195,23 @@ export function initDB() {
       }
     }
   }
+
+  if (currentVersion < 2) {
+    db.transaction(() => {
+      try {
+        db.exec("ALTER TABLE logs ADD COLUMN session_start TEXT;");
+      } catch (e) {}
+      try {
+        db.exec("ALTER TABLE sessions ADD COLUMN last_reset_date TEXT;");
+      } catch (e) {}
+      try {
+        db.exec("ALTER TABLE sessions ADD COLUMN total_pings_json TEXT;");
+      } catch (e) {}
+      
+      db.prepare("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)").run(2, new Date().toISOString());
+    })();
+    console.log("[MIGRATION] Schema Version 2 initialized successfully.");
+  }
 }
 
 export function getCompleteState(): CronlabState {
@@ -204,6 +221,19 @@ export function getCompleteState(): CronlabState {
   
   for (const p of projectsRows) {
     const checklistRows = db.prepare("SELECT * FROM checklist_items WHERE project_id = ?").all(p.id) as any[];
+    
+    // Dynamic age calculation
+    let calculatedAge = p.age;
+    try {
+      const start = new Date(p.date_started);
+      const now = new Date();
+      const diffTime = now.getTime() - start.getTime();
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      calculatedAge = `${Math.max(0, diffDays)} days`;
+    } catch {
+      calculatedAge = p.age || "0 days";
+    }
+
     projects.push({
       id: p.id,
       name: p.name,
@@ -214,7 +244,7 @@ export function getCompleteState(): CronlabState {
       velocity: p.velocity,
       mood: p.mood,
       dateStarted: p.date_started,
-      age: p.age,
+      age: calculatedAge,
       checklist: checklistRows.map((item) => ({
         id: item.id,
         text: item.text,
@@ -234,6 +264,7 @@ export function getCompleteState(): CronlabState {
     mood: l.mood,
     intentions: l.intentions_json ? JSON.parse(l.intentions_json) : [],
     ideas: l.ideas_json ? JSON.parse(l.ideas_json) : [],
+    sessionStart: l.session_start || undefined,
   }));
 
   // Query resurfaced_ideas
@@ -251,13 +282,36 @@ export function getCompleteState(): CronlabState {
   // Query session row
   let sessionRow = db.prepare("SELECT * FROM sessions WHERE id = 'current'").get() as any;
   if (!sessionRow) {
-    // If sessions table is somehow blank, seed fallback
+    // If sessions table is somehow blank, seed fallback with default columns
     db.prepare(`
       INSERT INTO sessions (
         id, project, start_time, last_log_line, elapsed_seconds, is_paused, missed_pings, next_ping_in, last_active,
-        today_focus_json, focus_depth, dead_time_count, topic_entropy, project_age_vs_progress_json, sparkline_json
-      ) VALUES ('current', 'compiler', ?, 'Welcome to Cronlab.', 0, 1, 0, 60, null, '{}', 80, 0, 1.5, '{}', ?)
-    `).run(new Date().toISOString(), JSON.stringify(Array(24).fill(0)));
+        today_focus_json, focus_depth, dead_time_count, topic_entropy, project_age_vs_progress_json, sparkline_json,
+        last_reset_date, total_pings_json
+      ) VALUES ('current', 'compiler', ?, 'Welcome to Cronlab.', 0, 1, 0, 60, null, '{}', 80, 0, 1.5, '{}', ?, ?, ?)
+    `).run(
+      new Date().toISOString(), 
+      JSON.stringify(Array(24).fill(0)), 
+      new Date().toDateString(), 
+      JSON.stringify(Array(24).fill(0))
+    );
+    sessionRow = db.prepare("SELECT * FROM sessions WHERE id = 'current'").get() as any;
+  }
+
+  // Midnight reset check!
+  const todayStr = new Date().toDateString();
+  if (sessionRow.last_reset_date !== todayStr) {
+    db.prepare(`
+      UPDATE sessions SET
+        dead_time_count = 0,
+        today_focus_json = '{}',
+        sparkline_json = ?,
+        total_pings_json = ?,
+        last_reset_date = ?
+      WHERE id = 'current'
+    `).run(JSON.stringify(Array(24).fill(0)), JSON.stringify(Array(24).fill(0)), todayStr);
+    
+    // Reload reset row
     sessionRow = db.prepare("SELECT * FROM sessions WHERE id = 'current'").get() as any;
   }
 
@@ -270,6 +324,7 @@ export function getCompleteState(): CronlabState {
     missedPings: sessionRow.missed_pings,
     nextPingIn: sessionRow.next_ping_in,
     lastActive: sessionRow.last_active || undefined,
+    lastResetDate: sessionRow.last_reset_date || undefined,
   };
 
   const metrics: Metrics = {
@@ -279,6 +334,7 @@ export function getCompleteState(): CronlabState {
     topicEntropy: sessionRow.topic_entropy,
     projectAgeVsProgress: JSON.parse(sessionRow.project_age_vs_progress_json || "{}"),
     sparkline: JSON.parse(sessionRow.sparkline_json || "[]"),
+    totalPings: JSON.parse(sessionRow.total_pings_json || "[]"),
   };
 
   return {
@@ -296,9 +352,10 @@ export function saveCompleteState(state: CronlabState) {
     db.prepare(`
       INSERT OR REPLACE INTO sessions (
         id, project, start_time, last_log_line, elapsed_seconds, is_paused, missed_pings, next_ping_in, last_active,
-        today_focus_json, focus_depth, dead_time_count, topic_entropy, project_age_vs_progress_json, sparkline_json
+        today_focus_json, focus_depth, dead_time_count, topic_entropy, project_age_vs_progress_json, sparkline_json,
+        last_reset_date, total_pings_json
       ) VALUES (
-        'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `).run(
       state.activeSession.project,
@@ -314,7 +371,9 @@ export function saveCompleteState(state: CronlabState) {
       state.metrics.deadTimeCount,
       state.metrics.topicEntropy,
       JSON.stringify(state.metrics.projectAgeVsProgress || {}),
-      JSON.stringify(state.metrics.sparkline || [])
+      JSON.stringify(state.metrics.sparkline || []),
+      (state.activeSession as any).lastResetDate || new Date().toDateString(),
+      JSON.stringify(state.metrics.totalPings || [])
     );
 
     // 2. Track project IDs to remove deleted/obsolete projects if any
@@ -361,11 +420,11 @@ export function saveCompleteState(state: CronlabState) {
 
     if (state.logs.length > 0) {
       const insertLog = db.prepare(`
-        INSERT OR REPLACE INTO logs (id, timestamp, raw_text, project, mood, intentions_json, ideas_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO logs (id, timestamp, raw_text, project, mood, intentions_json, ideas_json, session_start)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const l of state.logs) {
-        insertLog.run(l.id, l.timestamp, l.rawText, l.project, l.mood, JSON.stringify(l.intentions || []), JSON.stringify(l.ideas || []));
+        insertLog.run(l.id, l.timestamp, l.rawText, l.project, l.mood, JSON.stringify(l.intentions || []), JSON.stringify(l.ideas || []), (l as any).sessionStart || null);
       }
     }
 

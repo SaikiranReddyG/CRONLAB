@@ -8,6 +8,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { CronlabState, LogEntry, Project, ResurfacedIdea } from "./src/types";
 import { getCompleteState, saveCompleteState } from "./db";
+import { startScheduler } from "./scheduler";
 
 dotenv.config();
 
@@ -132,6 +133,7 @@ app.use((req, res, next) => {
 });
 
 // Heartbeat ticking system loop (simulates ticker awareness)
+let tickCounter = 0;
 setInterval(() => {
   const state = readDB();
   const session = state.activeSession;
@@ -154,13 +156,6 @@ setInterval(() => {
         state.metrics.todayFocus = {};
       }
       state.metrics.todayFocus[session.project] = (state.metrics.todayFocus[session.project] || 0) + 1;
-      
-      // Accumulate standard sparkline values in the current hour (2026 logs)
-      const hour = new Date().getUTCHours();
-      if (!state.metrics.sparkline) {
-        state.metrics.sparkline = Array(24).fill(0);
-      }
-      state.metrics.sparkline[hour] = (state.metrics.sparkline[hour] || 0) + 1;
     }
 
     // Ping countdown happens when active/not paused (ticking state)
@@ -171,6 +166,12 @@ setInterval(() => {
       session.missedPings += 1;
       session.nextPingIn = 60; // reset for the next interval
       
+      const hour = new Date().getHours();
+      if (!state.metrics.totalPings) {
+        state.metrics.totalPings = Array(24).fill(0);
+      }
+      state.metrics.totalPings[hour] = (state.metrics.totalPings[hour] || 0) + 1;
+      
       if (session.missedPings >= 3) {
         session.isPaused = true; // Auto-pause after 3 missed responses
         state.metrics.deadTimeCount = (state.metrics.deadTimeCount || 0) + 1;
@@ -178,7 +179,12 @@ setInterval(() => {
     }
   }
 
-  const shouldBroadcast = session.isPaused !== originalIsPaused || session.missedPings !== originalMissedPings;
+  tickCounter++;
+  const shouldBroadcast = 
+    (tickCounter % 10 === 0) || 
+    session.isPaused !== originalIsPaused || 
+    session.missedPings !== originalMissedPings;
+    
   writeDB(state, shouldBroadcast);
 }, 1000);
 
@@ -252,7 +258,7 @@ async function geminiParseLog(rawText: string, projectsList: Project[]) {
 
   try {
     const response = await aiClient.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.0-flash",
       contents: `Parse the following raw developer work log line:\n"${rawText}"`,
       config: {
         systemInstruction: `You are the Cronlab AI core. Your task is to extract highly structured semantic objects from a developer's raw natural language sentence log.
@@ -415,6 +421,7 @@ app.post("/api/log", async (req, res) => {
     mood: analysis.mood,
     intentions: analysis.intentions,
     ideas: analysis.ideas,
+    sessionStart: state.activeSession.startTime || new Date().toISOString(),
   };
 
   state.logs.unshift(newLog);
@@ -474,7 +481,8 @@ app.post("/api/log", async (req, res) => {
 
 function calculateProjectVelocity(project: Project): "up" | "down" | "flat" {
   const now = Date.now();
-  const fifteenMinutesMs = 15 * 60 * 1000;
+  const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+  const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
   
   const completedTimestamps = project.checklist
     .filter((item) => item.done && item.completedAt)
@@ -484,12 +492,12 @@ function calculateProjectVelocity(project: Project): "up" | "down" | "flat" {
     return "flat";
   }
   
-  const recentCount = completedTimestamps.filter((t) => (now - t) <= fifteenMinutesMs).length;
-  const previousCount = completedTimestamps.filter((t) => (now - t) > fifteenMinutesMs && (now - t) <= (2 * fifteenMinutesMs)).length;
+  const thisWeekCount = completedTimestamps.filter((t) => (now - t) <= oneWeekMs).length;
+  const lastWeekCount = completedTimestamps.filter((t) => (now - t) > oneWeekMs && (now - t) <= twoWeeksMs).length;
   
-  if (recentCount > previousCount) {
+  if (thisWeekCount > lastWeekCount) {
     return "up";
-  } else if (recentCount < previousCount && previousCount > 0) {
+  } else if (thisWeekCount < lastWeekCount) {
     return "down";
   } else {
     return "flat";
@@ -651,6 +659,7 @@ async function startServer() {
 
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`[OK] Server running on http://localhost:${PORT}`);
+    startScheduler();
   });
 }
 

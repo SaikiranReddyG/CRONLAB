@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ListTodo, Terminal, Clock, Eye, Activity, Plus, Play, Pause, AlertTriangle, CheckSquare, Square } from "lucide-react";
+import { ListTodo, Terminal, Clock, Eye, Activity, Plus, Play, Pause, AlertTriangle, CheckSquare, Square, Loader2 } from "lucide-react";
 import { Project, LogEntry, ActiveSession } from "../types";
 
 interface ProjectViewProps {
@@ -25,6 +25,17 @@ export default function ProjectView({
 }: ProjectViewProps) {
   const [newStepText, setNewStepText] = useState("");
   const isCurrentlyActive = activeSession.project === project.id;
+  const [togglingIds, setTogglingIds] = useState<string[]>([]);
+
+  const handleToggle = async (projId: string, itemId: string, done: boolean) => {
+    if (togglingIds.includes(itemId)) return;
+    setTogglingIds(prev => [...prev, itemId]);
+    try {
+      await onToggleChecklist(projId, itemId, done);
+    } finally {
+      setTogglingIds(prev => prev.filter(id => id !== itemId));
+    }
+  };
 
   // Filter logs for this specific project
   const projectLogs = logs.filter((log) => log.project === project.id);
@@ -208,26 +219,31 @@ export default function ProjectView({
             </form>
 
             <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
-              {project.checklist.map((item) => (
-                <div 
-                  key={item.id}
-                  onClick={() => onToggleChecklist(project.id, item.id, !item.done)}
-                  className={`flex items-start gap-3.5 px-3.5 py-2.5 bg-[#0a0a0a] hover:bg-[#151515] border border-[#1a1a1a] hover:border-brand-amber/25 rounded-none cursor-pointer transition-all ${
-                    item.done ? "opacity-45" : "opacity-100"
-                  }`}
-                >
-                  <button className="text-brand-amber shrink-0 mt-0.5 cursor-pointer">
-                    {item.done ? (
-                      <CheckSquare className="w-4 h-4" />
-                    ) : (
-                      <Square className="w-4 h-4 text-white/30" />
-                    )}
-                  </button>
-                  <span className={`font-mono text-xs select-text ${item.done ? "line-through text-white/40" : "text-brand-text"}`}>
-                    {item.text}
-                  </span>
-                </div>
-              ))}
+              {project.checklist.map((item) => {
+                const isToggling = togglingIds.includes(item.id);
+                return (
+                  <div 
+                    key={item.id}
+                    onClick={() => !isToggling && handleToggle(project.id, item.id, !item.done)}
+                    className={`flex items-start gap-3.5 px-3.5 py-2.5 bg-[#0a0a0a] hover:bg-[#151515] border border-[#1a1a1a] hover:border-brand-amber/25 rounded-none transition-all ${
+                      item.done ? "opacity-45" : "opacity-100"
+                    } ${isToggling ? "opacity-30 pointer-events-none select-none" : "cursor-pointer"}`}
+                  >
+                    <button className="text-brand-amber shrink-0 mt-0.5 cursor-pointer" disabled={isToggling}>
+                      {isToggling ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-brand-amber" />
+                      ) : item.done ? (
+                        <CheckSquare className="w-4 h-4" />
+                      ) : (
+                        <Square className="w-4 h-4 text-white/30" />
+                      )}
+                    </button>
+                    <span className={`font-mono text-xs select-text ${item.done ? "line-through text-white/40" : "text-brand-text"}`}>
+                      {item.text}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
 

@@ -27,7 +27,14 @@ export default function BottomInput({ onLogLine, projects }: BottomInputProps) {
   // Focus input on '/' or 'ctr+k'
   useEffect(() => {
     const handleGlobalKeys = (e: KeyboardEvent) => {
-      if ((e.ctrlKey && e.key === "k") || (e.key === "/" && document.activeElement !== inputRef.current)) {
+      if (e.ctrlKey && e.key === "k") {
+        e.preventDefault();
+        if (document.activeElement === inputRef.current) {
+          inputRef.current?.select();
+        } else {
+          inputRef.current?.focus();
+        }
+      } else if (e.key === "/" && document.activeElement !== inputRef.current) {
         e.preventDefault();
         inputRef.current?.focus();
       }

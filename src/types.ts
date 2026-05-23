@@ -27,6 +27,7 @@ export interface LogEntry {
   mood: "flow" | "calm" | "stuck" | "tired" | "none";
   intentions: string[];
   ideas: string[];
+  sessionStart?: string;
 }
 
 export interface ResurfacedIdea {
@@ -48,6 +49,7 @@ export interface ActiveSession {
   missedPings: number;
   nextPingIn: number; // seconds countdown
   lastActive?: string;
+  lastResetDate?: string;
 }
 
 export interface Metrics {
@@ -57,6 +59,7 @@ export interface Metrics {
   topicEntropy: number; // e.g. 1.8
   projectAgeVsProgress: Record<string, { age: number; progress: number }>;
   sparkline: number[]; // Pings processed per hour (24 values)
+  totalPings?: number[];
 }
 
 export interface CronlabState {

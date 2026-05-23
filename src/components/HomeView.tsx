@@ -1,5 +1,5 @@
-import React from "react";
-import { Play, Pause, Flame, Target, Compass, Sparkles, Activity, CheckSquare, Square, ChevronRight } from "lucide-react";
+import React, { useState } from "react";
+import { Play, Pause, Flame, Target, Compass, Sparkles, Activity, CheckSquare, Square, ChevronRight, Loader2 } from "lucide-react";
 import { CronlabState, Project } from "../types";
 
 interface HomeViewProps {
@@ -20,6 +20,17 @@ export default function HomeView({
   onRespondPing,
 }: HomeViewProps) {
   const { projects, activeSession, metrics } = state;
+  const [togglingIds, setTogglingIds] = useState<string[]>([]);
+
+  const handleToggle = async (projId: string, itemId: string, done: boolean) => {
+    if (togglingIds.includes(itemId)) return;
+    setTogglingIds(prev => [...prev, itemId]);
+    try {
+      await onToggleChecklist(projId, itemId, done);
+    } finally {
+      setTogglingIds(prev => prev.filter(id => id !== itemId));
+    }
+  };
 
   // Resolve active project objects
   const activeProj = projects.find((p) => p.id === activeSession.project) || projects[0];
@@ -57,8 +68,15 @@ export default function HomeView({
     none: "bg-gray-500 text-gray-250 border-gray-600",
   };
 
-  // Fetch all recent intentions ('>next' from recent logs) for Morning Brief
-  const recentIntentions = state.logs
+  // Fetch morning brief >next intentions from the last session's logs only
+  const latestLogWithSession = state.logs.find(l => l.sessionStart);
+  const latestSessionStart = latestLogWithSession ? latestLogWithSession.sessionStart : null;
+
+  const lastSessionLogs = latestSessionStart
+    ? state.logs.filter(l => l.sessionStart === latestSessionStart)
+    : state.logs.slice(0, 5); // Fallback to last 5 logs if no session started yet
+
+  const recentIntentions = lastSessionLogs
     .flatMap((l) => l.intentions || [])
     .filter((v, i, self) => self.indexOf(v) === i)
     .slice(0, 4);
@@ -317,26 +335,31 @@ export default function HomeView({
 
           <div className="my-5 space-y-2.5 max-h-64 overflow-y-auto pr-1">
             {activeProj && activeProj.checklist.length > 0 ? (
-              activeProj.checklist.map((item) => (
-                <div 
-                  key={item.id}
-                  onClick={() => onToggleChecklist(activeProj.id, item.id, !item.done)}
-                  className={`flex items-center gap-3 px-3 py-2 bg-[#0a0a0a] hover:bg-[#151515] border border-[#1a1a1a] hover:border-brand-amber/25 rounded-none cursor-pointer transition-all ${
-                    item.done ? "opacity-45" : "opacity-100"
-                  }`}
-                >
-                  <button className="text-brand-amber shrink-0 cursor-pointer">
-                    {item.done ? (
-                      <CheckSquare className="w-4 h-4" />
-                    ) : (
-                      <Square className="w-4 h-4 text-white/30" />
-                    )}
-                  </button>
-                  <span className={`font-mono text-xs select-text ${item.done ? "line-through text-white/40" : "text-brand-text"}`}>
-                    {item.text}
-                  </span>
-                </div>
-              ))
+              activeProj.checklist.map((item) => {
+                const isToggling = togglingIds.includes(item.id);
+                return (
+                  <div 
+                    key={item.id}
+                    onClick={() => !isToggling && handleToggle(activeProj.id, item.id, !item.done)}
+                    className={`flex items-center gap-3 px-3 py-2 bg-[#0a0a0a] hover:bg-[#151515] border border-[#1a1a1a] hover:border-brand-amber/25 rounded-none transition-all ${
+                      item.done ? "opacity-45" : "opacity-100"
+                    } ${isToggling ? "opacity-30 pointer-events-none select-none" : "cursor-pointer"}`}
+                  >
+                    <button className="text-brand-amber shrink-0 cursor-pointer" disabled={isToggling}>
+                      {isToggling ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-brand-amber" />
+                      ) : item.done ? (
+                        <CheckSquare className="w-4 h-4" />
+                      ) : (
+                        <Square className="w-4 h-4 text-white/30" />
+                      )}
+                    </button>
+                    <span className={`font-mono text-xs select-text ${item.done ? "line-through text-white/40" : "text-brand-text"}`}>
+                      {item.text}
+                    </span>
+                  </div>
+                );
+              })
             ) : (
               <div className="p-8 text-center text-white/20 font-mono text-xs border border-dashed border-[#1a1a1a] rounded-none">
                 No checkpoints loaded. Use inputs to build steps!
@@ -431,28 +454,46 @@ export default function HomeView({
             </div>
 
             {/* Sparkline canvas graph built with small bars aligned horizontally */}
-            <div className="bg-[#0a0a0a] p-2.5 rounded-none border border-[#1a1a1a] flex items-end justify-between h-14 w-full px-4" id="sparkline-container">
+            <div className="bg-[#0a0a0a] p-2.5 rounded-none border border-[#1a1a1a] flex items-end justify-between h-14 w-full px-4 relative" id="sparkline-container">
               {metrics.sparkline && metrics.sparkline.map((val, idx) => {
-                const maxVal = Math.max(...metrics.sparkline, 1);
-                const heightPct = (val / maxVal) * 90;
+                const totalVal = metrics.totalPings ? (metrics.totalPings[idx] || 0) : 0;
+                
+                const maxTotal = Math.max(...(metrics.totalPings || []), 1);
+                const maxConfirmed = Math.max(...metrics.sparkline, 1);
+                
+                const totalHeightPct = (totalVal / maxTotal) * 90;
+                const activeHeightPct = (val / maxConfirmed) * 90;
+                
+                const ratio = totalVal > 0 ? Math.round((val / totalVal) * 100) : 0;
+                
                 return (
                   <div 
                     key={idx} 
-                    className="group relative h-full flex-grow mx-[1px] flex items-end"
+                    className="group relative h-full flex-grow mx-[1.5px] flex items-end justify-center"
                   >
+                    {/* Underlying total pings (dim ambient presence) */}
                     <div 
-                      className={`w-full rounded-none transition-all duration-300 ${
-                        idx === new Date().getUTCHours() 
-                          ? "bg-brand-amber" 
-                          : val > 0 ? "bg-brand-amber/60 hover:bg-brand-amber" : "bg-white/5"
+                      className="w-full bg-white/5 rounded-none transition-all duration-300 absolute"
+                      style={{ 
+                        height: `${Math.max(5, totalHeightPct)}%`,
+                        opacity: 0.25
+                      }}
+                    ></div>
+                    {/* Confirmed pings (solid focus bar) */}
+                    <div 
+                      className={`w-full rounded-none transition-all duration-300 z-10 ${
+                        idx === new Date().getHours() 
+                          ? "bg-brand-amber animate-pulse" 
+                          : ratio >= 75 ? "bg-brand-green/85 hover:bg-brand-green" 
+                          : ratio > 0 ? "bg-brand-amber/60 hover:bg-brand-amber" : "bg-white/5"
                       }`}
                       style={{ 
-                        height: `${Math.max(5, heightPct)}%`
+                        height: `${Math.max(5, activeHeightPct)}%`
                       }}
                     ></div>
                     {/* Tooltip on hovering spark points */}
-                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-black text-[7px] text-brand-amber px-1 rounded-none opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 border border-brand-amber/30">
-                      Hr {idx}: {val} pings
+                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-black text-[7px] text-brand-amber px-1.5 py-0.5 rounded-none opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 border border-brand-amber/30 font-mono">
+                      Hr {String(idx).padStart(2, '0')}: Confirmed {val}/{totalVal} ({ratio}%)
                     </span>
                   </div>
                 );

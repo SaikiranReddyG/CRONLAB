@@ -5,6 +5,7 @@ import BottomInput from "./components/BottomInput";
 import HomeView from "./components/HomeView";
 import ProjectView from "./components/ProjectView";
 import ResurfaceView from "./components/ResurfaceView";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 export default function App() {
   const [state, setState] = useState<CronlabState | null>(null);
@@ -296,40 +297,46 @@ export default function App() {
   const renderMainContent = () => {
     if (activeTabIndex === 0) {
       return (
-        <HomeView
-          state={state}
-          onSelectProjectTab={handleNavToProjectTab}
-          onToggleChecklist={handleToggleChecklist}
-          onToggleSessionState={handleToggleSessionState}
-          onStateReset={handleStateReset}
-          onRespondPing={handleRespondPing}
-        />
+        <ErrorBoundary fallbackTitle="HOME DASHBOARD UNCHECKED LIFE-CYCLE DEGRADATION">
+          <HomeView
+            state={state}
+            onSelectProjectTab={handleNavToProjectTab}
+            onToggleChecklist={handleToggleChecklist}
+            onToggleSessionState={handleToggleSessionState}
+            onStateReset={handleStateReset}
+            onRespondPing={handleRespondPing}
+          />
+        </ErrorBoundary>
       );
     }
     if (activeTabIndex >= 1 && activeTabIndex <= projects.length) {
       const selectedProj = projects[activeTabIndex - 1];
       if (selectedProj) {
         return (
-          <ProjectView
-            project={selectedProj}
-            logs={logs}
-            activeSession={activeSession}
-            onToggleChecklist={handleToggleChecklist}
-            onToggleSessionState={handleToggleSessionState}
-            onSwitchProject={handleSwitchProject}
-            onLogLine={handleLogLineSubmit}
-            onAddChecklistItem={handleAddChecklistItem}
-          />
+          <ErrorBoundary fallbackTitle={`PROJECT WORK LEDGER DEGRADED (${selectedProj.tag.toUpperCase()})`}>
+            <ProjectView
+              project={selectedProj}
+              logs={logs}
+              activeSession={activeSession}
+              onToggleChecklist={handleToggleChecklist}
+              onToggleSessionState={handleToggleSessionState}
+              onSwitchProject={handleSwitchProject}
+              onLogLine={handleLogLineSubmit}
+              onAddChecklistItem={handleAddChecklistItem}
+            />
+          </ErrorBoundary>
         );
       }
     }
     if (activeTabIndex === resurfaceTabIndex) {
       return (
-        <ResurfaceView
-          ideas={resurfacedIdeas}
-          projects={projects}
-          onIdeaAction={handleIdeaAction}
-        />
+        <ErrorBoundary fallbackTitle="RESURFACE MODULE RETRIEVAL BLOCKED">
+          <ResurfaceView
+            ideas={resurfacedIdeas}
+            projects={projects}
+            onIdeaAction={handleIdeaAction}
+          />
+        </ErrorBoundary>
       );
     }
     return null;
