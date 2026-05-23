@@ -1,0 +1,6 @@
+{
+  "name": "Cronlab",
+  "description": "A personal productivity OS and live working record that tracks, parses, and reflects your daily progress, focus, and ideas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

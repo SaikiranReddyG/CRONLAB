@@ -1,0 +1,219 @@
+{
+  "projects": [
+    {
+      "id": "compiler",
+      "name": "Preon Compiler",
+      "tag": "compiler",
+      "status": "ACTIVE",
+      "percentDone": 53,
+      "lastTouched": "2026-05-23T20:15:00Z",
+      "velocity": "up",
+      "mood": "flow",
+      "dateStarted": "2026-04-10",
+      "age": "43 days",
+      "checklist": [
+        { "id": "comp-1", "text": "Draft syntax specification for Preon AST", "done": true },
+        { "id": "comp-2", "text": "Implement lexical analyzer using custom state machine", "done": true },
+        { "id": "comp-3", "text": "Bootstrap recursive descent parser", "done": true },
+        { "id": "comp-4", "text": "Design concrete syntax tree (CST) structures", "done": true },
+        { "id": "comp-5", "text": "Build symbol table and scope resolution pass", "done": true },
+        { "id": "comp-6", "text": "Implement type inference engine for variables", "done": true },
+        { "id": "comp-7", "text": "Write code generator targeting WebAssembly (Wasm)", "done": true },
+        { "id": "comp-8", "text": "Optimize AST representation and memory footprint", "done": true },
+        { "id": "comp-9", "text": "Benchmark execution speed vs native Node.js parser", "done": false },
+        { "id": "comp-10", "text": "Implement REPL terminal in frontend dashboard", "done": false },
+        { "id": "comp-11", "text": "Integrate auto-complete suggestions inside prompt text", "done": false },
+        { "id": "comp-12", "text": "Create simple standard library with printing utilities", "done": false },
+        { "id": "comp-13", "text": "Write integration test suite for recursion & loops", "done": false },
+        { "id": "comp-14", "text": "Document grammar using elegant monospace spec definitions", "done": false },
+        { "id": "comp-15", "text": "Build source-map generation support", "done": false }
+      ]
+    },
+    {
+      "id": "kernel",
+      "name": "AetherOS Kernel",
+      "tag": "kernel",
+      "status": "PAUSED",
+      "percentDone": 33,
+      "lastTouched": "2026-05-20T17:45:00Z",
+      "velocity": "flat",
+      "mood": "calm",
+      "dateStarted": "2026-03-01",
+      "age": "83 days",
+      "checklist": [
+        { "id": "ker-1", "text": "Configure multitrack x86 boot loader in assembly", "done": true },
+        { "id": "ker-2", "text": "Establish virtual memory protection maps with GDT", "done": true },
+        { "id": "ker-3", "text": "Write basic screen VGA text driver (0xB8000 buffer)", "done": true },
+        { "id": "ker-4", "text": "Map programmable interrupt controller (PIC) IRQs", "done": true },
+        { "id": "ker-5", "text": "Implement serial port debugging output", "done": true },
+        { "id": "ker-6", "text": "Write physical memory manager (bitmap-based page frames)", "done": false },
+        { "id": "ker-7", "text": "Support kernel heap allocation (kmalloc and kfree)", "done": false },
+        { "id": "ker-8", "text": "Develop pre-emptive scheduler (round-robin threads)", "done": false },
+        { "id": "ker-9", "text": "Create Virtual File System (VFS) layout and root node", "done": false },
+        { "id": "ker-10", "text": "Add support for simple tar-based initrd ramdisk", "done": false },
+        { "id": "ker-11", "text": "Write keyboard driver with custom scan code keymap", "done": false },
+        { "id": "ker-12", "text": "Establish system call interface (int 0x80 gate)", "done": false },
+        { "id": "ker-13", "text": "Cleanly isolate user-space stack pages", "done": false },
+        { "id": "ker-14", "text": "Test page faults handler stack-trace rendering", "done": false },
+        { "id": "ker-15", "text": "Benchmark task-switch latency under stress workload", "done": false }
+      ]
+    },
+    {
+      "id": "analytics",
+      "name": "Spectra Analytics",
+      "tag": "analytics",
+      "status": "ACTIVE",
+      "percentDone": 66,
+      "lastTouched": "2026-05-23T19:20:00Z",
+      "velocity": "up",
+      "mood": "calm",
+      "dateStarted": "2026-05-01",
+      "age": "22 days",
+      "checklist": [
+        { "id": "ana-1", "text": "Construct time-series database storage on disk", "done": true },
+        { "id": "ana-2", "text": "Implement query compiler parsing SQL-like aggregations", "done": true },
+        { "id": "ana-3", "text": "Write high-frequency ingestion ringbuffer in memory", "done": true },
+        { "id": "ana-4", "text": "Add compression logic for floating points (Chimp/Gorilla)", "done": true },
+        { "id": "ana-5", "text": "Build live metrics aggregation pipeline for stream rows", "done": true },
+        { "id": "ana-6", "text": "Implement JSON API to feed real-time metric tables", "done": true },
+        { "id": "ana-7", "text": "Write dashboard UI utilizing SVG rendering arrays", "done": true },
+        { "id": "ana-8", "text": "Add roll-up background job to compress old hours", "done": true },
+        { "id": "ana-9", "text": "Implement anomaly detection based on running stddev", "done": false },
+        { "id": "ana-10", "text": "Build alert triggers targeting curl endpoints", "done": false },
+        { "id": "ana-11", "text": "Add multi-tenant token isolation level", "done": false },
+        { "id": "ana-12", "text": "Perform query-latency benchmark under 5k writes/sec", "done": false }
+      ]
+    },
+    {
+      "id": "portfolio",
+      "name": "Minimalist Web OS",
+      "tag": "portfolio",
+      "status": "IDEA",
+      "percentDone": 20,
+      "lastTouched": "2026-05-22T15:30:00Z",
+      "velocity": "flat",
+      "mood": "calm",
+      "dateStarted": "2026-05-15",
+      "age": "8 days",
+      "checklist": [
+        { "id": "port-1", "text": "Design custom grid arrangement with CSS viewport units", "done": true },
+        { "id": "port-2", "text": "Build physics-backed window dragging in Canvas", "done": true },
+        { "id": "port-3", "text": "Establish virtual shell terminal with simulated utils", "done": false },
+        { "id": "port-4", "text": "Create window-dock state store using React Context", "done": false },
+        { "id": "port-5", "text": "Integrate keyboard-based launchers (fuzzy search)", "done": false },
+        { "id": "port-6", "text": "Build custom syntax highlighter engine", "done": false },
+        { "id": "port-7", "text": "Support markdown resume rendering", "done": false },
+        { "id": "port-8", "text": "Add background terminal soundtrack with WebAudio oscillators", "done": false }
+      ]
+    },
+    {
+      "id": "ai-terminal",
+      "name": "Cognitive Shell (LLM CLI)",
+      "tag": "ai-terminal",
+      "status": "ACTIVE",
+      "percentDone": 40,
+      "lastTouched": "2026-05-23T15:10:00Z",
+      "velocity": "down",
+      "mood": "stuck",
+      "dateStarted": "2026-05-05",
+      "age": "18 days",
+      "checklist": [
+        { "id": "cli-1", "text": "Define basic prompt-assembly templating rules", "done": true },
+        { "id": "cli-2", "text": "Integrate Gemini flash model calling API in typescript", "done": true },
+        { "id": "cli-3", "text": "Serialize system state output to model injection string", "done": true },
+        { "id": "cli-4", "text": "Parse markdown and render text format safely in shell", "done": true },
+        { "id": "cli-5", "text": "Embed direct execution prompt guard checking safe mode", "done": false },
+        { "id": "cli-6", "text": "Implement SQLite chat state local history database", "done": false },
+        { "id": "cli-7", "text": "Implement live tool-calling for filesystem read operations", "done": false },
+        { "id": "cli-8", "text": "Add support for multimodal base64 image inspection", "done": false }
+      ]
+    }
+  ],
+  "logs": [
+    {
+      "id": "log-1",
+      "timestamp": "2026-05-23T15:10:00Z",
+      "rawText": "Spent 2 hours struggling with multi-modal base64 embeddings parsing, the payload boundary is off #ai-terminal ~stuck",
+      "project": "ai-terminal",
+      "mood": "stuck",
+      "intentions": [],
+      "ideas": ["multimodal embeddings"]
+    },
+    {
+      "id": "log-2",
+      "timestamp": "2026-05-23T19:20:00Z",
+      "rawText": "Optimized live metric time-series compression by implementing running delta aggregation #analytics ~calm >next implement anomaly limits",
+      "project": "analytics",
+      "mood": "calm",
+      "intentions": ["implement anomaly limits"],
+      "ideas": []
+    },
+    {
+      "id": "log-3",
+      "timestamp": "2026-05-23T20:15:00Z",
+      "rawText": "Finished AST scope verification. Recursive code gen successfully compiling standard library functions! #compiler ~flow >next integrate type checker Wasm modules",
+      "project": "compiler",
+      "mood": "flow",
+      "intentions": ["integrate type checker Wasm modules"],
+      "ideas": []
+    }
+  ],
+  "resurfacedIdeas": [
+    {
+      "id": "idea-1",
+      "timestamp": "2026-04-06T12:00:00Z",
+      "rawText": "We should build an inline assembler that targets WebAssembly binary arrays directly in the compiler REPL +idea",
+      "project": "compiler",
+      "ageDays": 47,
+      "status": "active",
+      "deferredCount": 1
+    },
+    {
+      "id": "idea-2",
+      "timestamp": "2026-05-10T14:30:00Z",
+      "rawText": "Would be neat to map keyboard velocity to UI audio notes when coding in flow state +idea",
+      "project": "portfolio",
+      "ageDays": 13,
+      "status": "active",
+      "deferredCount": 0
+    },
+    {
+      "id": "idea-3",
+      "timestamp": "2026-05-18T11:15:00Z",
+      "rawText": "How about a zero-allocation parsing pipeline using string slices references +idea",
+      "project": "compiler",
+      "ageDays": 5,
+      "status": "later",
+      "deferredCount": 2
+    }
+  ],
+  "activeSession": {
+    "project": "compiler",
+    "startTime": "2026-05-23T20:15:00Z",
+    "lastLogLine": "Finished AST scope verification. Recursive code gen successfully compiling standard library functions! #compiler ~flow",
+    "elapsedSeconds": 4680,
+    "isPaused": false,
+    "missedPings": 0,
+    "nextPingIn": 45
+  },
+  "metrics": {
+    "todayFocus": {
+      "compiler": 120,
+      "analytics": 45,
+      "ai-terminal": 120,
+      "kernel": 0,
+      "portfolio": 0
+    },
+    "focusDepth": 87,
+    "deadTimeCount": 3,
+    "topicEntropy": 2.1,
+    "projectAgeVsProgress": {
+      "compiler": { "age": 43, "progress": 53 },
+      "kernel": { "age": 83, "progress": 33 },
+      "analytics": { "age": 22, "progress": 66 },
+      "portfolio": { "age": 8, "progress": 20 },
+      "ai-terminal": { "age": 18, "progress": 40 }
+    },
+    "sparkline": [12, 18, 5, 0, 0, 0, 0, 0, 4, 15, 25, 30, 18, 12, 5, 12, 35, 42, 50, 60, 40, 25, 30, 45]
+  }
+}
