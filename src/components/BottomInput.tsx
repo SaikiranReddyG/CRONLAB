@@ -62,8 +62,8 @@ export default function BottomInput({ onLogLine, projects }: BottomInputProps) {
     // Get current cursor placement context
     const cursor = e.target.selectionStart || 0;
     const textBeforeCursor = val.slice(0, cursor);
-    const words = textBeforeCursor.split(/\s+/);
-    const lastWord = words[words.length - 1];
+    const lastSpaceIdx = textBeforeCursor.lastIndexOf(" ");
+    const lastWord = lastSpaceIdx === -1 ? textBeforeCursor : textBeforeCursor.slice(lastSpaceIdx + 1);
 
     const matchChar = ["#", "~", ">", "+"].find((char) => lastWord.startsWith(char));
 
@@ -89,10 +89,9 @@ export default function BottomInput({ onLogLine, projects }: BottomInputProps) {
     const textBefore = inputValue.slice(0, cursor);
     const textAfter = inputValue.slice(cursor);
 
-    const words = textBefore.split(/\s+/);
-    // Replace the last word (containing the trigger char) with complete tag
-    words[words.length - 1] = `${triggerChar}${item.key}`;
-    const newTextBefore = words.join(" ") + " ";
+    const lastSpaceIdx = textBefore.lastIndexOf(" ");
+    const textBeforeLastWord = lastSpaceIdx === -1 ? "" : textBefore.slice(0, lastSpaceIdx + 1);
+    const newTextBefore = `${textBeforeLastWord}${triggerChar}${item.key} `;
 
     setInputValue(newTextBefore + textAfter);
     setDropdownOpen(false);

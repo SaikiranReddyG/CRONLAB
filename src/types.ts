@@ -2,6 +2,7 @@ export interface ChecklistItem {
   id: string;
   text: string;
   done: boolean;
+  completedAt?: string;
 }
 
 export interface Project {
@@ -46,6 +47,7 @@ export interface ActiveSession {
   isPaused: boolean;
   missedPings: number;
   nextPingIn: number; // seconds countdown
+  lastActive?: string;
 }
 
 export interface Metrics {

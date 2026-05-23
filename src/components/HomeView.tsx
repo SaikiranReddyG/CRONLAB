@@ -8,6 +8,7 @@ interface HomeViewProps {
   onToggleChecklist: (projectId: string, itemId: string, done: boolean) => Promise<void>;
   onToggleSessionState: (action: "pause" | "resume") => Promise<void>;
   onStateReset: () => Promise<void>;
+  onRespondPing: () => Promise<void>;
 }
 
 export default function HomeView({
@@ -16,6 +17,7 @@ export default function HomeView({
   onToggleChecklist,
   onToggleSessionState,
   onStateReset,
+  onRespondPing,
 }: HomeViewProps) {
   const { projects, activeSession, metrics } = state;
 
@@ -25,7 +27,7 @@ export default function HomeView({
   // Cooling effect helper (returns opacity class if project hasn't been touched in >= 3 days)
   const getProjectCoolingClass = (lastTouchedStr: string) => {
     try {
-      const now = new Date("2026-05-23T21:33:25Z"); // Fixed local time provided
+      const now = new Date(); // Use new Date() dynamically
       const touchedDate = new Date(lastTouchedStr);
       const diffMs = now.getTime() - touchedDate.getTime();
       const diffDays = diffMs / (1000 * 60 * 60 * 24);
@@ -147,10 +149,25 @@ export default function HomeView({
               </div>
             )}
 
-            {!activeSession.isPaused && (
+            {!activeSession.isPaused && activeSession.missedPings === 0 && (
               <div className="bg-[#111111] border border-[#4a7c59]/20 px-3 py-2 text-[10px] font-mono text-brand-green flex items-center gap-2 rounded-none">
                 <span className="inline-block w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
                 <span>STATE CAPABILITY STABLE &mdash; PERSISTING DIRECT STREAM LOGS TO DISK</span>
+              </div>
+            )}
+
+            {!activeSession.isPaused && activeSession.missedPings > 0 && (
+              <div className="bg-[#1a130c] border border-amber-500/30 px-3 py-2 text-[10px] font-mono text-amber-400 flex items-center justify-between gap-2 rounded-none animate-pulse">
+                <span className="flex items-center gap-1.5 font-bold">
+                  <Flame className="w-3.5 h-3.5 text-amber-500 animate-spin" />
+                  <span>ALERT SIGNAL: REACHABILITY CHECK &mdash; {activeSession.missedPings}/3 UNANSWERED PINGS</span>
+                </span>
+                <button
+                  onClick={onRespondPing}
+                  className="px-2 py-0.5 bg-brand-amber text-black text-[9px] font-mono font-extrabold rounded-none cursor-pointer hover:bg-white transition-colors"
+                >
+                  ACKNOWLEDGE
+                </button>
               </div>
             )}
 
@@ -414,15 +431,14 @@ export default function HomeView({
             </div>
 
             {/* Sparkline canvas graph built with small bars aligned horizontally */}
-            <div className="bg-[#0a0a0a] p-2.5 rounded-none border border-[#1a1a1a] flex items-end justify-between h-14 w-full px-4">
+            <div className="bg-[#0a0a0a] p-2.5 rounded-none border border-[#1a1a1a] flex items-end justify-between h-14 w-full px-4" id="sparkline-container">
               {metrics.sparkline && metrics.sparkline.map((val, idx) => {
                 const maxVal = Math.max(...metrics.sparkline, 1);
                 const heightPct = (val / maxVal) * 90;
                 return (
                   <div 
                     key={idx} 
-                    className="group relative flex-grow mx-[1px]"
-                    style={{ height: "100%" }}
+                    className="group relative h-full flex-grow mx-[1px] flex items-end"
                   >
                     <div 
                       className={`w-full rounded-none transition-all duration-300 ${
@@ -431,9 +447,7 @@ export default function HomeView({
                           : val > 0 ? "bg-brand-amber/60 hover:bg-brand-amber" : "bg-white/5"
                       }`}
                       style={{ 
-                        height: `${Math.max(5, heightPct)}%`,
-                        bottom: 0,
-                        position: "absolute"
+                        height: `${Math.max(5, heightPct)}%`
                       }}
                     ></div>
                     {/* Tooltip on hovering spark points */}

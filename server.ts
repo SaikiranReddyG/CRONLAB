@@ -7,6 +7,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { CronlabState, LogEntry, Project, ResurfacedIdea } from "./src/types";
+import { getCompleteState, saveCompleteState } from "./db";
 
 dotenv.config();
 
@@ -15,19 +16,40 @@ const server = http.createServer(app);
 const PORT = 3000;
 
 // Initialize WebSockets
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ noServer: true });
 
 // Connections list for real-time broadcasts
 const activeSockets = new Set<WebSocket>();
+let lastActiveTime = Date.now();
+
+function updateLastActive() {
+  lastActiveTime = Date.now();
+}
 
 wss.on("connection", (ws) => {
   activeSockets.add(ws);
+  updateLastActive();
   console.log(`[WS] Client connected. Total sockets: ${activeSockets.size}`);
+
+  ws.on("message", () => {
+    updateLastActive();
+  });
 
   ws.on("close", () => {
     activeSockets.delete(ws);
+    updateLastActive();
     console.log(`[WS] Client disconnected. Total sockets: ${activeSockets.size}`);
   });
+});
+
+// Handle custom websocket upgrade path /ws to avoid conflict with Vite WS connection
+server.on("upgrade", (request, socket, head) => {
+  const url = request.url || "";
+  if (url.startsWith("/ws")) {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit("connection", ws, request);
+    });
+  }
 });
 
 // Broadcast state updates helper
@@ -61,65 +83,73 @@ if (process.env.GEMINI_API_KEY) {
 }
 
 // Database helper definitions
-const dbPath = path.join(process.cwd(), "db.json");
-
 function readDB(): CronlabState {
   try {
-    if (fs.existsSync(dbPath)) {
-      const raw = fs.readFileSync(dbPath, "utf-8");
-      return JSON.parse(raw);
-    }
+    return getCompleteState();
   } catch (err) {
-    console.error("Error reading database:", err);
+    console.error("Error reading SQLite database, return fallback:", err);
+    return {
+      projects: [],
+      logs: [],
+      resurfacedIdeas: [],
+      activeSession: {
+        project: "compiler",
+        startTime: new Date().toISOString(),
+        lastLogLine: "Welcome to Cronlab.",
+        elapsedSeconds: 0,
+        isPaused: true,
+        missedPings: 0,
+        nextPingIn: 60,
+      },
+      metrics: {
+        todayFocus: {},
+        focusDepth: 80,
+        deadTimeCount: 0,
+        topicEntropy: 1.5,
+        projectAgeVsProgress: {},
+        sparkline: Array(24).fill(0),
+      },
+    };
   }
-  
-  // Return empty fallback DB structure if missing
-  return {
-    projects: [],
-    logs: [],
-    resurfacedIdeas: [],
-    activeSession: {
-      project: "compiler",
-      startTime: new Date().toISOString(),
-      lastLogLine: "Welcome to Cronlab.",
-      elapsedSeconds: 0,
-      isPaused: true,
-      missedPings: 0,
-      nextPingIn: 60,
-    },
-    metrics: {
-      todayFocus: {},
-      focusDepth: 80,
-      deadTimeCount: 0,
-      topicEntropy: 1.5,
-      projectAgeVsProgress: {},
-      sparkline: Array(24).fill(0),
-    },
-  };
 }
 
-function writeDB(state: CronlabState) {
+function writeDB(state: CronlabState, broadcast = true) {
   try {
-    fs.writeFileSync(dbPath, JSON.stringify(state, null, 2), "utf-8");
-    broadcastStateUpdate(state);
+    saveCompleteState(state);
+    if (broadcast) {
+      broadcastStateUpdate(state);
+    }
   } catch (err) {
-    console.error("Error writing to database:", err);
+    console.error("Error writing to SQLite database:", err);
   }
 }
 
 // Express middlewares
 app.use(express.json());
+app.use((req, res, next) => {
+  updateLastActive();
+  next();
+});
 
 // Heartbeat ticking system loop (simulates ticker awareness)
 setInterval(() => {
   const state = readDB();
   const session = state.activeSession;
+  const originalIsPaused = session.isPaused;
+  const originalMissedPings = session.missedPings;
   
   if (!session.isPaused && session.project) {
-    session.elapsedSeconds += 1;
+    // Only increment elapsed duration if the client is actively connected or showing recent activity (gaps handling)
+    const hasActiveClients = activeSockets.size > 0;
+    const isRecentActivity = (Date.now() - lastActiveTime) < 15000;
+    
+    if (hasActiveClients || isRecentActivity) {
+      session.elapsedSeconds += 1;
+      session.lastActive = new Date().toISOString();
+    }
     
     // Update local focus time metric (1 minute = 60s)
-    if (session.elapsedSeconds % 60 === 0) {
+    if (session.elapsedSeconds % 60 === 0 && (hasActiveClients || isRecentActivity)) {
       if (!state.metrics.todayFocus) {
         state.metrics.todayFocus = {};
       }
@@ -132,23 +162,24 @@ setInterval(() => {
       }
       state.metrics.sparkline[hour] = (state.metrics.sparkline[hour] || 0) + 1;
     }
-  }
 
-  // Count down next ping
-  if (session.nextPingIn > 1) {
-    session.nextPingIn -= 1;
-  } else {
-    // Reset ping target (60s timer)
-    session.nextPingIn = 60;
-    
-    if (session.isPaused) {
-      // Missed count accrues if paused
+    // Ping countdown happens when active/not paused (ticking state)
+    if (session.nextPingIn > 1) {
+      session.nextPingIn -= 1;
+    } else {
+      // Ping fires!
       session.missedPings += 1;
-      state.metrics.deadTimeCount = session.missedPings;
+      session.nextPingIn = 60; // reset for the next interval
+      
+      if (session.missedPings >= 3) {
+        session.isPaused = true; // Auto-pause after 3 missed responses
+        state.metrics.deadTimeCount = (state.metrics.deadTimeCount || 0) + 1;
+      }
     }
   }
 
-  writeDB(state);
+  const shouldBroadcast = session.isPaused !== originalIsPaused || session.missedPings !== originalMissedPings;
+  writeDB(state, shouldBroadcast);
 }, 1000);
 
 // Parser Fallback helper using RegExp
@@ -395,17 +426,6 @@ app.post("/api/log", async (req, res) => {
   state.activeSession.missedPings = 0;
   state.metrics.deadTimeCount = 0;
 
-  // Track intentions as actual checklist milestones if flagged >next, or alertmorning brief
-  if (analysis.intentions && analysis.intentions.length > 0 && targetProject) {
-    analysis.intentions.forEach((intText: string, idx: number) => {
-      targetProject?.checklist.unshift({
-        id: `chk-int-${Date.now()}-${idx}`,
-        text: intText,
-        done: false,
-      });
-    });
-  }
-
   // Track ideas in Resurface
   if (analysis.ideas && analysis.ideas.length > 0) {
     analysis.ideas.forEach((ideaText: string, idx: number) => {
@@ -422,22 +442,91 @@ app.post("/api/log", async (req, res) => {
     });
   }
 
-  // Standardize Entropy Score calculation (entropy of tags count to give tech aesthetic)
-  const tagCounts: Record<string, number> = {};
+  // Time-weighted Entropy Score calculation (entropy of time-decayed project counts to give tech aesthetic)
+  const projectWeights: Record<string, number> = {};
+  let totalWeight = 0;
+  
+  const now = Date.now();
   state.logs.forEach((l) => {
-    tagCounts[l.project] = (tagCounts[l.project] || 0) + 1;
+    const logTime = new Date(l.timestamp).getTime();
+    const ageHours = (now - logTime) / (1000 * 60 * 60);
+    // Exponential decay: log 12 hours old has weight e^-1 ≈ 0.36
+    const weight = Math.exp(-ageHours / 12);
+    projectWeights[l.project] = (projectWeights[l.project] || 0) + weight;
+    totalWeight += weight;
   });
-  const totalLogs = state.logs.length;
+
   let entropy = 0;
-  Object.values(tagCounts).forEach((c) => {
-    const p = c / totalLogs;
-    entropy -= p * Math.log2(p);
-  });
+  if (totalWeight > 0) {
+    Object.values(projectWeights).forEach((w) => {
+      const p = w / totalWeight;
+      if (p > 0) {
+        entropy -= p * Math.log2(p);
+      }
+    });
+  }
   state.metrics.topicEntropy = Number((entropy || 1.2).toFixed(2));
   state.metrics.focusDepth = Math.max(20, Math.min(100, 100 - state.activeSession.missedPings * 12));
 
   writeDB(state);
   res.json({ success: true, log: newLog, analysis });
+});
+
+function calculateProjectVelocity(project: Project): "up" | "down" | "flat" {
+  const now = Date.now();
+  const fifteenMinutesMs = 15 * 60 * 1000;
+  
+  const completedTimestamps = project.checklist
+    .filter((item) => item.done && item.completedAt)
+    .map((item) => new Date(item.completedAt!).getTime());
+    
+  if (completedTimestamps.length === 0) {
+    return "flat";
+  }
+  
+  const recentCount = completedTimestamps.filter((t) => (now - t) <= fifteenMinutesMs).length;
+  const previousCount = completedTimestamps.filter((t) => (now - t) > fifteenMinutesMs && (now - t) <= (2 * fifteenMinutesMs)).length;
+  
+  if (recentCount > previousCount) {
+    return "up";
+  } else if (recentCount < previousCount && previousCount > 0) {
+    return "down";
+  } else {
+    return "flat";
+  }
+}
+
+// 4.3 Add Checklist Item directly
+app.post("/api/checklist/add", (req, res) => {
+  const { projectId, text } = req.body;
+  if (!projectId || !text || !text.trim()) {
+    return res.status(400).json({ error: "Missing projectId or text" });
+  }
+
+  const state = readDB();
+  const project = state.projects.find((p) => p.id === projectId);
+  if (!project) {
+    return res.status(404).json({ error: "Project not found" });
+  }
+
+  const newItem = {
+    id: `chk-${Date.now()}`,
+    text: text.trim(),
+    done: false,
+  };
+
+  project.checklist.push(newItem);
+
+  // Recalculate percentDone
+  const total = project.checklist.length;
+  const completed = project.checklist.filter((c) => c.done).length;
+  project.percentDone = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  // Update velocity indicators dynamically
+  project.velocity = calculateProjectVelocity(project);
+
+  writeDB(state);
+  res.json({ success: true, project, item: newItem });
 });
 
 // 4. Update Checklist item
@@ -452,6 +541,11 @@ app.post("/api/checklist/toggle", (req, res) => {
   const item = project.checklist.find((i) => i.id === itemId);
   if (item) {
     item.done = done;
+    if (done) {
+      item.completedAt = new Date().toISOString();
+    } else {
+      delete item.completedAt;
+    }
     
     // Recalculate percentDone
     const total = project.checklist.length;
@@ -459,7 +553,7 @@ app.post("/api/checklist/toggle", (req, res) => {
     project.percentDone = total > 0 ? Math.round((completed / total) * 100) : 0;
     
     // Update velocity indicators dynamically
-    project.velocity = project.percentDone > 50 ? "up" : "flat";
+    project.velocity = calculateProjectVelocity(project);
     
     writeDB(state);
     res.json({ success: true, project });
@@ -491,6 +585,15 @@ app.post("/api/session/state", (req, res) => {
     }
   }
 
+  writeDB(state);
+  res.json({ success: true, activeSession: state.activeSession });
+});
+
+// 5.5 Respond to Reachability Check Ping
+app.post("/api/session/ping/respond", (req, res) => {
+  const state = readDB();
+  state.activeSession.missedPings = 0;
+  state.activeSession.nextPingIn = 60;
   writeDB(state);
   res.json({ success: true, activeSession: state.activeSession });
 });

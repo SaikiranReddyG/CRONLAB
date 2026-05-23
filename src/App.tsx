@@ -11,6 +11,38 @@ export default function App() {
   const [activeTabIndex, setActiveTabIndex] = useState(0); // 0 = HOME, 1-5 = PROJECTS, 6 = RESURFACE
   const [connectionStatus, setConnectionStatus] = useState<"connecting" | "ws_online" | "polling_fallback">("connecting");
 
+  // Local active session countdown and elapsed clock tick simulator between periodic backend state syncs
+  useEffect(() => {
+    if (!state) return;
+    const session = state.activeSession;
+    if (session.isPaused) return;
+
+    const interval = setInterval(() => {
+      setState((prev) => {
+        if (!prev) return null;
+        if (prev.activeSession.isPaused) return prev;
+        
+        const nextPing = prev.activeSession.nextPingIn > 1 ? prev.activeSession.nextPingIn - 1 : 60;
+        const elapsed = prev.activeSession.elapsedSeconds + 1;
+        const missed = prev.activeSession.nextPingIn === 1 ? prev.activeSession.missedPings + 1 : prev.activeSession.missedPings;
+        const isPaused = missed >= 3 ? true : prev.activeSession.isPaused;
+        
+        return {
+          ...prev,
+          activeSession: {
+            ...prev.activeSession,
+            elapsedSeconds: elapsed,
+            nextPingIn: nextPing,
+            missedPings: missed,
+            isPaused: isPaused,
+          }
+        };
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [state?.activeSession?.isPaused]);
+
   // Fetch initial state via HTTP REST API
   const fetchState = async () => {
     try {
@@ -34,7 +66,7 @@ export default function App() {
     const setupWSConnection = () => {
       try {
         const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const wsUrl = `${proto}//${window.location.host}/`;
+        const wsUrl = `${proto}//${window.location.host}/ws`;
         
         console.log(`[WS] Connecting to host ${wsUrl}`);
         ws = new WebSocket(wsUrl);
@@ -118,6 +150,7 @@ export default function App() {
   }
 
   const { projects, logs, resurfacedIdeas, activeSession } = state;
+  const resurfaceTabIndex = projects.length + 1;
 
   // Swell active project tracking naming
   const activeProj = projects.find((p) => p.id === activeSession.project);
@@ -168,6 +201,35 @@ export default function App() {
       }
     } catch (err) {
       console.error("[API] Failed to toggle focus ticking state:", err);
+    }
+  };
+
+  const handleRespondPing = async () => {
+    try {
+      const res = await fetch("/api/session/ping/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (res.ok) {
+        await fetchState();
+      }
+    } catch (err) {
+      console.error("[API] Failed to respond to signal ping check:", err);
+    }
+  };
+
+  const handleAddChecklistItem = async (projectId: string, text: string) => {
+    try {
+      const res = await fetch("/api/checklist/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, text }),
+      });
+      if (res.ok) {
+        await fetchState();
+      }
+    } catch (err) {
+      console.error("[API] Failed to add checklist item directly:", err);
     }
   };
 
@@ -231,6 +293,48 @@ export default function App() {
     "RESURFACE",
   ];
 
+  const renderMainContent = () => {
+    if (activeTabIndex === 0) {
+      return (
+        <HomeView
+          state={state}
+          onSelectProjectTab={handleNavToProjectTab}
+          onToggleChecklist={handleToggleChecklist}
+          onToggleSessionState={handleToggleSessionState}
+          onStateReset={handleStateReset}
+          onRespondPing={handleRespondPing}
+        />
+      );
+    }
+    if (activeTabIndex >= 1 && activeTabIndex <= projects.length) {
+      const selectedProj = projects[activeTabIndex - 1];
+      if (selectedProj) {
+        return (
+          <ProjectView
+            project={selectedProj}
+            logs={logs}
+            activeSession={activeSession}
+            onToggleChecklist={handleToggleChecklist}
+            onToggleSessionState={handleToggleSessionState}
+            onSwitchProject={handleSwitchProject}
+            onLogLine={handleLogLineSubmit}
+            onAddChecklistItem={handleAddChecklistItem}
+          />
+        );
+      }
+    }
+    if (activeTabIndex === resurfaceTabIndex) {
+      return (
+        <ResurfaceView
+          ideas={resurfacedIdeas}
+          projects={projects}
+          onIdeaAction={handleIdeaAction}
+        />
+      );
+    }
+    return null;
+  };
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#0a0a0a] text-[#e8e6e0]" id="cronlab-app-container">
       {/* 1. System Header banner */}
@@ -255,10 +359,10 @@ export default function App() {
                 }`}
               >
                 {tabLabel}
-                {/* Visual marker notification badge for the RESURFACE tab if active ideas are preloaded */}
-                {tabLabel === "RESURFACE" && resurfacedIdeas.filter(f => f.status === "active").length > 0 && (
+                {/* Visual marker notification badge for the RESURFACE tab if active/later ideas are preloaded */}
+                {tabLabel === "RESURFACE" && resurfacedIdeas.filter(f => f.status === "active" || f.status === "later").length > 0 && (
                   <span className="ml-1.5 px-1 py-[1px] bg-brand-amber/20 text-brand-amber text-[8px] border border-brand-amber/30 rounded-none font-bold">
-                    {resurfacedIdeas.filter(f => f.status === "active").length}
+                    {resurfacedIdeas.filter(f => f.status === "active" || f.status === "later").length}
                   </span>
                 )}
               </button>
@@ -279,38 +383,32 @@ export default function App() {
 
       {/* 3. Main Body Scroll Tab Coordinates */}
       <main className="flex-1 flex flex-col min-h-0 relative">
-        {activeTabIndex === 0 && (
-          <HomeView
-            state={state}
-            onSelectProjectTab={handleNavToProjectTab}
-            onToggleChecklist={handleToggleChecklist}
-            onToggleSessionState={handleToggleSessionState}
-            onStateReset={handleStateReset}
-          />
+        {/* Floating Reachability Prompt Overlay */}
+        {!activeSession.isPaused && activeSession.missedPings > 0 && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-sm px-4">
+            <div className="bg-[#1a130c] border border-brand-amber text-brand-amber p-4 shadow-2xl flex flex-col gap-3 font-mono">
+              <div className="flex items-center justify-between border-b border-brand-amber/20 pb-2">
+                <span className="flex items-center gap-1.5 font-bold text-[10px] uppercase tracking-wider animate-pulse">
+                  <span className="inline-block w-2.5 h-2.5 bg-brand-amber rounded-full"></span>
+                  <span>REACHABILITY PILOT CHECK</span>
+                </span>
+                <span className="text-[10px] opacity-60 uppercase font-bold">
+                  {activeSession.missedPings}/3 UNANSWERED PINGS
+                </span>
+              </div>
+              <div className="text-xs text-brand-text/90">
+                Are you still actively working on <span className="text-[#ffffff] font-bold">#{activeProjectLabel}</span>? Confirm with the button below.
+              </div>
+              <button
+                onClick={handleRespondPing}
+                className="w-full py-2 bg-brand-amber text-black hover:bg-white text-xs font-bold uppercase transition-colors cursor-pointer rounded-none tracking-wider font-mono font-extrabold"
+              >
+                I AM ACTIVE (ACK)
+              </button>
+            </div>
+          </div>
         )}
-
-        {activeTabIndex >= 1 && activeTabIndex <= p.length && projects[activeTabIndex - 1] && (() => {
-          const selectedProj = projects[activeTabIndex - 1];
-          return (
-            <ProjectView
-              project={selectedProj}
-              logs={logs}
-              activeSession={activeSession}
-              onToggleChecklist={handleToggleChecklist}
-              onToggleSessionState={handleToggleSessionState}
-              onSwitchProject={handleSwitchProject}
-              onLogLine={handleLogLineSubmit}
-            />
-          );
-        })()}
-
-        {activeTabIndex === 6 && (
-          <ResurfaceView
-            ideas={resurfacedIdeas}
-            projects={projects}
-            onIdeaAction={handleIdeaAction}
-          />
-        )}
+        {renderMainContent()}
       </main>
 
       {/* 4. Console Bottom Bar Input */}
@@ -321,5 +419,3 @@ export default function App() {
     </div>
   );
 }
-// Add short helper alias referencing projects list safely
-const p = [1, 2, 3, 4, 5];

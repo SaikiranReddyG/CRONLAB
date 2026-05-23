@@ -10,6 +10,7 @@ interface ProjectViewProps {
   onToggleSessionState: (action: "pause" | "resume") => Promise<void>;
   onSwitchProject: (id: string) => Promise<void>;
   onLogLine: (line: string) => Promise<void>;
+  onAddChecklistItem: (projectId: string, text: string) => Promise<void>;
 }
 
 export default function ProjectView({
@@ -20,6 +21,7 @@ export default function ProjectView({
   onToggleSessionState,
   onSwitchProject,
   onLogLine,
+  onAddChecklistItem,
 }: ProjectViewProps) {
   const [newStepText, setNewStepText] = useState("");
   const isCurrentlyActive = activeSession.project === project.id;
@@ -81,9 +83,7 @@ export default function ProjectView({
     e.preventDefault();
     if (!newStepText || !newStepText.trim()) return;
 
-    // Simulate adding a step by appending a log line configured as an intention!
-    const constructLogLine = `Append next checkpoint: ${newStepText} #${project.tag}`;
-    onLogLine(constructLogLine);
+    onAddChecklistItem(project.id, newStepText);
     setNewStepText("");
   };
 
