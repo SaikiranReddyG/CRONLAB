@@ -50,6 +50,8 @@ export interface ActiveSession {
   nextPingIn: number; // seconds countdown
   lastActive?: string;
   lastResetDate?: string;
+  isAwaitingResponse?: boolean;
+  awaitingResponseRemaining?: number;
 }
 
 export interface Metrics {

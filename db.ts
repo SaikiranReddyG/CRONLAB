@@ -212,6 +212,56 @@ export function initDB() {
     })();
     console.log("[MIGRATION] Schema Version 2 initialized successfully.");
   }
+
+  if (currentVersion < 3) {
+    db.transaction(() => {
+      try {
+        db.exec("ALTER TABLE sessions ADD COLUMN is_awaiting_response INTEGER DEFAULT 0;");
+      } catch (e) {}
+      try {
+        db.exec("ALTER TABLE sessions ADD COLUMN awaiting_response_remaining INTEGER DEFAULT 0;");
+      } catch (e) {}
+      try {
+        // Backfill completed_at for done items using the project's date_started, falling back to 3 days ago.
+        db.exec(`
+          UPDATE checklist_items 
+          SET completed_at = COALESCE(
+            (SELECT date_started || 'T00:00:00.000Z' FROM projects WHERE projects.id = checklist_items.project_id),
+            datetime('now', '-3 days')
+          )
+          WHERE done = 1 AND (completed_at IS NULL OR completed_at = '');
+        `);
+      } catch (e) {}
+      
+      db.prepare("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)").run(3, new Date().toISOString());
+    })();
+    console.log("[MIGRATION] Schema Version 3 initialized successfully.");
+  }
+}
+
+function calculateDbProjectVelocity(checklist: any[]): "up" | "down" | "flat" {
+  const now = Date.now();
+  const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+  const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+  
+  const completedTimestamps = checklist
+    .filter((item) => (item.done === 1 || item.done === true) && item.completed_at)
+    .map((item) => new Date(item.completed_at).getTime());
+    
+  if (completedTimestamps.length === 0) {
+    return "flat";
+  }
+  
+  const thisWeekCount = completedTimestamps.filter((t) => (now - t) <= oneWeekMs).length;
+  const lastWeekCount = completedTimestamps.filter((t) => (now - t) > oneWeekMs && (now - t) <= twoWeeksMs).length;
+  
+  if (thisWeekCount > lastWeekCount) {
+    return "up";
+  } else if (thisWeekCount < lastWeekCount) {
+    return "down";
+  } else {
+    return "flat";
+  }
 }
 
 export function getCompleteState(): CronlabState {
@@ -234,6 +284,8 @@ export function getCompleteState(): CronlabState {
       calculatedAge = p.age || "0 days";
     }
 
+    const dynamicVelocity = calculateDbProjectVelocity(checklistRows);
+
     projects.push({
       id: p.id,
       name: p.name,
@@ -241,7 +293,7 @@ export function getCompleteState(): CronlabState {
       status: p.status,
       percentDone: p.percent_done,
       lastTouched: p.last_touched,
-      velocity: p.velocity,
+      velocity: dynamicVelocity,
       mood: p.mood,
       dateStarted: p.date_started,
       age: calculatedAge,
@@ -325,6 +377,8 @@ export function getCompleteState(): CronlabState {
     nextPingIn: sessionRow.next_ping_in,
     lastActive: sessionRow.last_active || undefined,
     lastResetDate: sessionRow.last_reset_date || undefined,
+    isAwaitingResponse: sessionRow.is_awaiting_response === 1,
+    awaitingResponseRemaining: sessionRow.awaiting_response_remaining ?? 0,
   };
 
   const metrics: Metrics = {
@@ -346,16 +400,49 @@ export function getCompleteState(): CronlabState {
   };
 }
 
+export function saveActiveSessionAndMetrics(state: CronlabState) {
+  db.prepare(`
+    INSERT OR REPLACE INTO sessions (
+      id, project, start_time, last_log_line, elapsed_seconds, is_paused, missed_pings, next_ping_in, last_active,
+      is_awaiting_response, awaiting_response_remaining,
+      today_focus_json, focus_depth, dead_time_count, topic_entropy, project_age_vs_progress_json, sparkline_json,
+      last_reset_date, total_pings_json
+    ) VALUES (
+      'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    )
+  `).run(
+    state.activeSession.project,
+    state.activeSession.startTime,
+    state.activeSession.lastLogLine,
+    state.activeSession.elapsedSeconds,
+    state.activeSession.isPaused ? 1 : 0,
+    state.activeSession.missedPings,
+    state.activeSession.nextPingIn,
+    state.activeSession.lastActive || null,
+    state.activeSession.isAwaitingResponse ? 1 : 0,
+    state.activeSession.awaitingResponseRemaining ?? 0,
+    JSON.stringify(state.metrics.todayFocus || {}),
+    state.metrics.focusDepth,
+    state.metrics.deadTimeCount,
+    state.metrics.topicEntropy,
+    JSON.stringify(state.metrics.projectAgeVsProgress || {}),
+    JSON.stringify(state.metrics.sparkline || []),
+    state.activeSession.lastResetDate || new Date().toDateString(),
+    JSON.stringify(state.metrics.totalPings || [])
+  );
+}
+
 export function saveCompleteState(state: CronlabState) {
   db.transaction(() => {
     // 1. Update/sessions
     db.prepare(`
       INSERT OR REPLACE INTO sessions (
         id, project, start_time, last_log_line, elapsed_seconds, is_paused, missed_pings, next_ping_in, last_active,
+        is_awaiting_response, awaiting_response_remaining,
         today_focus_json, focus_depth, dead_time_count, topic_entropy, project_age_vs_progress_json, sparkline_json,
         last_reset_date, total_pings_json
       ) VALUES (
-        'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `).run(
       state.activeSession.project,
@@ -366,13 +453,15 @@ export function saveCompleteState(state: CronlabState) {
       state.activeSession.missedPings,
       state.activeSession.nextPingIn,
       state.activeSession.lastActive || null,
+      state.activeSession.isAwaitingResponse ? 1 : 0,
+      state.activeSession.awaitingResponseRemaining ?? 0,
       JSON.stringify(state.metrics.todayFocus || {}),
       state.metrics.focusDepth,
       state.metrics.deadTimeCount,
       state.metrics.topicEntropy,
       JSON.stringify(state.metrics.projectAgeVsProgress || {}),
       JSON.stringify(state.metrics.sparkline || []),
-      (state.activeSession as any).lastResetDate || new Date().toDateString(),
+      state.activeSession.lastResetDate || new Date().toDateString(),
       JSON.stringify(state.metrics.totalPings || [])
     );
 

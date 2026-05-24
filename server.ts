@@ -7,7 +7,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { CronlabState, LogEntry, Project, ResurfacedIdea } from "./src/types";
-import { getCompleteState, saveCompleteState } from "./db";
+import { getCompleteState, saveCompleteState, saveActiveSessionAndMetrics } from "./db";
 import { startScheduler } from "./scheduler";
 
 dotenv.config();
@@ -125,10 +125,24 @@ function writeDB(state: CronlabState, broadcast = true) {
   }
 }
 
+function writeSessionDB(state: CronlabState, broadcast = true) {
+  try {
+    saveActiveSessionAndMetrics(state);
+    if (broadcast) {
+      broadcastStateUpdate(state);
+    }
+  } catch (err) {
+    console.error("Error writing session to SQLite database:", err);
+  }
+}
+
 // Express middlewares
 app.use(express.json());
 app.use((req, res, next) => {
-  updateLastActive();
+  // Exclude background polling state fetch from marking the user active
+  if (req.method !== "GET" || req.path !== "/api/state") {
+    updateLastActive();
+  }
   next();
 });
 
@@ -139,6 +153,7 @@ setInterval(() => {
   const session = state.activeSession;
   const originalIsPaused = session.isPaused;
   const originalMissedPings = session.missedPings;
+  const originalIsAwaitingResponse = !!session.isAwaitingResponse;
   
   if (!session.isPaused && session.project) {
     // Only increment elapsed duration if the client is actively connected or showing recent activity (gaps handling)
@@ -158,34 +173,52 @@ setInterval(() => {
       state.metrics.todayFocus[session.project] = (state.metrics.todayFocus[session.project] || 0) + 1;
     }
 
-    // Ping countdown happens when active/not paused (ticking state)
-    if (session.nextPingIn > 1) {
-      session.nextPingIn -= 1;
-    } else {
-      // Ping fires!
-      session.missedPings += 1;
-      session.nextPingIn = 60; // reset for the next interval
-      
-      const hour = new Date().getHours();
-      if (!state.metrics.totalPings) {
-        state.metrics.totalPings = Array(24).fill(0);
+    if (session.isAwaitingResponse) {
+      // In pilot verification awaiting response state tick
+      if (session.awaitingResponseRemaining && session.awaitingResponseRemaining > 1) {
+        session.awaitingResponseRemaining -= 1;
+      } else {
+        // Grace period expired without acknowledgement! Record a miss
+        session.isAwaitingResponse = false;
+        session.awaitingResponseRemaining = 0;
+        session.missedPings += 1;
+        session.nextPingIn = 60; // reset
+        
+        const hour = new Date().getHours();
+        if (!state.metrics.totalPings) {
+          state.metrics.totalPings = Array(24).fill(0);
+        }
+        state.metrics.totalPings[hour] = (state.metrics.totalPings[hour] || 0) + 1;
+        
+        if (session.missedPings >= 3) {
+          session.isPaused = true; // Auto-pause after 3 missed responses
+          state.metrics.deadTimeCount = (state.metrics.deadTimeCount || 0) + 1;
+        }
       }
-      state.metrics.totalPings[hour] = (state.metrics.totalPings[hour] || 0) + 1;
-      
-      if (session.missedPings >= 3) {
-        session.isPaused = true; // Auto-pause after 3 missed responses
-        state.metrics.deadTimeCount = (state.metrics.deadTimeCount || 0) + 1;
+    } else {
+      // Standard countdown tick
+      if (session.nextPingIn > 1) {
+        session.nextPingIn -= 1;
+      } else {
+        // Reached 1/0 boundary -> enter Awaiting Response wait state
+        session.nextPingIn = 0;
+        session.isAwaitingResponse = true;
+        session.awaitingResponseRemaining = 15; // 15 seconds grace period
       }
     }
   }
+
+  // Recalculate dynamic focus depth based on missed counts
+  state.metrics.focusDepth = Math.max(20, Math.min(100, 100 - session.missedPings * 12));
 
   tickCounter++;
   const shouldBroadcast = 
     (tickCounter % 10 === 0) || 
     session.isPaused !== originalIsPaused || 
-    session.missedPings !== originalMissedPings;
+    session.missedPings !== originalMissedPings ||
+    (!!session.isAwaitingResponse) !== originalIsAwaitingResponse;
     
-  writeDB(state, shouldBroadcast);
+  writeSessionDB(state, shouldBroadcast);
 }, 1000);
 
 // Parser Fallback helper using RegExp
@@ -431,15 +464,17 @@ app.post("/api/log", async (req, res) => {
   state.activeSession.isPaused = false; // Awake session on entering logs!
   state.activeSession.nextPingIn = 60; // reset ping block
   state.activeSession.missedPings = 0;
+  state.activeSession.isAwaitingResponse = false;
+  state.activeSession.awaitingResponseRemaining = 0;
   state.metrics.deadTimeCount = 0;
 
-  // Track ideas in Resurface
+  // Track ideas in Resurface cleanly without cluttered description prefixes
   if (analysis.ideas && analysis.ideas.length > 0) {
     analysis.ideas.forEach((ideaText: string, idx: number) => {
       const newIdea: ResurfacedIdea = {
         id: `idea-${Date.now()}-${idx}`,
         timestamp: new Date().toISOString(),
-        rawText: `Concept brainstorm: ${ideaText} (+idea from log)`,
+        rawText: ideaText.trim(),
         project: targetProject ? targetProject.id : state.activeSession.project,
         ageDays: 0,
         status: "active",
@@ -448,6 +483,13 @@ app.post("/api/log", async (req, res) => {
       state.resurfacedIdeas.unshift(newIdea);
     });
   }
+
+  // A log line submission counts as an active confirmed focus tick: increment sparkline
+  const hour = new Date().getHours();
+  if (!state.metrics.sparkline) {
+    state.metrics.sparkline = Array(24).fill(0);
+  }
+  state.metrics.sparkline[hour] = (state.metrics.sparkline[hour] || 0) + 1;
 
   // Time-weighted Entropy Score calculation (entropy of time-decayed project counts to give tech aesthetic)
   const projectWeights: Record<string, number> = {};
@@ -602,6 +644,16 @@ app.post("/api/session/ping/respond", (req, res) => {
   const state = readDB();
   state.activeSession.missedPings = 0;
   state.activeSession.nextPingIn = 60;
+  state.activeSession.isAwaitingResponse = false;
+  state.activeSession.awaitingResponseRemaining = 0;
+  
+  // Update sparkline for the energy curve confirmed pings
+  const hour = new Date().getHours();
+  if (!state.metrics.sparkline) {
+    state.metrics.sparkline = Array(24).fill(0);
+  }
+  state.metrics.sparkline[hour] = (state.metrics.sparkline[hour] || 0) + 1;
+  
   writeDB(state);
   res.json({ success: true, activeSession: state.activeSession });
 });
