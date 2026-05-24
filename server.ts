@@ -114,7 +114,7 @@ function readDB(): CronlabState {
   }
 }
 
-function writeDB(state: CronlabState, broadcast = true) {
+function writeDB(state: CronlabState, broadcast = false) {
   try {
     saveCompleteState(state);
     if (broadcast) {
@@ -125,7 +125,7 @@ function writeDB(state: CronlabState, broadcast = true) {
   }
 }
 
-function writeSessionDB(state: CronlabState, broadcast = true) {
+function writeSessionDB(state: CronlabState, broadcast = false) {
   try {
     saveActiveSessionAndMetrics(state);
     if (broadcast) {
@@ -382,7 +382,7 @@ app.post("/api/state/reset", (req, res) => {
     sparkline: Array(24).fill(0),
   };
   
-  writeDB(state);
+  writeDB(state, true);
   res.json({ status: "success", state });
 });
 
@@ -517,7 +517,7 @@ app.post("/api/log", async (req, res) => {
   state.metrics.topicEntropy = Number((entropy || 1.2).toFixed(2));
   state.metrics.focusDepth = Math.max(20, Math.min(100, 100 - state.activeSession.missedPings * 12));
 
-  writeDB(state);
+  writeDB(state, true);
   res.json({ success: true, log: newLog, analysis });
 });
 
@@ -575,7 +575,7 @@ app.post("/api/checklist/add", (req, res) => {
   // Update velocity indicators dynamically
   project.velocity = calculateProjectVelocity(project);
 
-  writeDB(state);
+  writeDB(state, true);
   res.json({ success: true, project, item: newItem });
 });
 
@@ -605,7 +605,7 @@ app.post("/api/checklist/toggle", (req, res) => {
     // Update velocity indicators dynamically
     project.velocity = calculateProjectVelocity(project);
     
-    writeDB(state);
+    writeDB(state, true);
     res.json({ success: true, project });
   } else {
     res.status(404).json({ error: "Checklist item not found" });
@@ -635,7 +635,7 @@ app.post("/api/session/state", (req, res) => {
     }
   }
 
-  writeDB(state);
+  writeDB(state, true);
   res.json({ success: true, activeSession: state.activeSession });
 });
 
@@ -654,7 +654,7 @@ app.post("/api/session/ping/respond", (req, res) => {
   }
   state.metrics.sparkline[hour] = (state.metrics.sparkline[hour] || 0) + 1;
   
-  writeDB(state);
+  writeDB(state, true);
   res.json({ success: true, activeSession: state.activeSession });
 });
 
@@ -689,7 +689,7 @@ app.post("/api/ideas/action", (req, res) => {
     idea.status = "later";
   }
 
-  writeDB(state);
+  writeDB(state, true);
   res.json({ success: true, item: idea });
 });
 
