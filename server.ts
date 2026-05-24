@@ -151,9 +151,11 @@ let tickCounter = 0;
 setInterval(() => {
   const state = readDB();
   const session = state.activeSession;
+  const originalElapsedSeconds = session.elapsedSeconds;
   const originalIsPaused = session.isPaused;
   const originalMissedPings = session.missedPings;
   const originalIsAwaitingResponse = !!session.isAwaitingResponse;
+  const originalNextPingIn = session.nextPingIn;
   
   if (!session.isPaused && session.project) {
     // Only increment elapsed duration if the client is actively connected or showing recent activity (gaps handling)
@@ -211,14 +213,26 @@ setInterval(() => {
   // Recalculate dynamic focus depth based on missed counts
   state.metrics.focusDepth = Math.max(20, Math.min(100, 100 - session.missedPings * 12));
 
+  // Determine if database write is needed:
+  // Only call writeSessionDB() if elapsedSeconds changed AND the session is not paused, OR if isPaused changed, OR if missedPings changed, OR if nextPingIn reached zero (ping fired).
+  const elapChanged = session.elapsedSeconds !== originalElapsedSeconds;
+  const pausChanged = session.isPaused !== originalIsPaused;
+  const missedChanged = session.missedPings !== originalMissedPings;
+  const pingFired = originalNextPingIn > 0 && session.nextPingIn === 0;
+
+  const shouldWrite = (elapChanged && !session.isPaused) || pausChanged || missedChanged || pingFired;
+
   tickCounter++;
-  const shouldBroadcast = 
-    (tickCounter % 10 === 0) || 
-    session.isPaused !== originalIsPaused || 
-    session.missedPings !== originalMissedPings ||
-    (!!session.isAwaitingResponse) !== originalIsAwaitingResponse;
-    
-  writeSessionDB(state, shouldBroadcast);
+  
+  // For the timer tick specifically, only broadcast via WebSocket every 10 seconds instead of every second
+  const isTransition = pausChanged || missedChanged || ((!!session.isAwaitingResponse) !== originalIsAwaitingResponse);
+  const shouldBroadcast = isTransition || (tickCounter % 10 === 0);
+
+  if (shouldWrite) {
+    writeSessionDB(state, shouldBroadcast);
+  } else if (shouldBroadcast) {
+    broadcastStateUpdate(state);
+  }
 }, 1000);
 
 // Parser Fallback helper using RegExp
