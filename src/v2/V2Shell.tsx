@@ -180,8 +180,13 @@ export default function V2Shell() {
       setLoading(true);
       const res = await fetch("/api/v2/folders");
       if (res.ok) {
-        const data = await res.json();
-        setFolders(data);
+        const text = await res.text();
+        try {
+          const data = JSON.parse(text);
+          setFolders(data);
+        } catch (e) {
+          console.error("Failed to parse folders JSON:", text);
+        }
       }
     } catch (err) {
       console.error("[v2 Shell] Error fetching folders:", err);
@@ -213,12 +218,28 @@ export default function V2Shell() {
         }),
       });
 
+      const responseText = await res.text();
+
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Failed to create folder");
+        let errMsg = "Failed to create folder";
+        try {
+          const errData = JSON.parse(responseText);
+          errMsg = errData.error || errMsg;
+        } catch (e) {
+          if (responseText) {
+            errMsg = responseText.slice(0, 150);
+          }
+        }
+        throw new Error(errMsg);
       }
 
-      const createdFolder = await res.json();
+      let createdFolder;
+      try {
+        createdFolder = JSON.parse(responseText);
+      } catch (parseErr) {
+        throw new Error(`Invalid response format from server: ${responseText.slice(0, 150) || "empty response"}`);
+      }
+
       await fetchFolders();
 
       // Clean form inputs
@@ -227,7 +248,9 @@ export default function V2Shell() {
       setIsModalOpen(false);
 
       // Instantly open the newly created folder
-      setActiveFolderId(createdFolder.id);
+      if (createdFolder && createdFolder.id) {
+        setActiveFolderId(createdFolder.id);
+      }
     } catch (err: any) {
       setErrorMsg(err.message || "Something went wrong.");
     } finally {

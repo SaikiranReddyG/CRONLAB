@@ -153,22 +153,36 @@ export default function FolderViewV2({
       if (makeDefaultActive) setLoading(true);
       setError(null);
       const res = await fetch(`/api/v2/folders/${folderId}`);
+      const text = await res.text();
       if (!res.ok) {
-        throw new Error("Unable to retrieve details for this workspace folder.");
-      }
-      const data = (await res.json()) as FullFolderDetails;
-      setFolder(data);
-
-      // Auto-set the active block to the scratchpad if none selected or if matching fresh load
-      if (data.blocks && data.blocks.length > 0) {
-        if (makeDefaultActive || !selectedBlockId || !data.blocks.some(b => b.id === selectedBlockId)) {
-          const scratchpad = data.blocks.find(b => b.is_scratchpad === 1);
-          if (scratchpad) {
-            setSelectedBlockId(scratchpad.id);
-          } else {
-            setSelectedBlockId(data.blocks[0].id);
+        let errStr = "Unable to retrieve details for this workspace folder.";
+        try {
+          const errJson = JSON.parse(text);
+          errStr = errJson.error || errStr;
+        } catch (e) {
+          if (text) {
+            errStr = text.slice(0, 150);
           }
         }
+        throw new Error(errStr);
+      }
+      try {
+        const data = JSON.parse(text) as FullFolderDetails;
+        setFolder(data);
+
+        // Auto-set the active block to the scratchpad if none selected or if matching fresh load
+        if (data.blocks && data.blocks.length > 0) {
+          if (makeDefaultActive || !selectedBlockId || !data.blocks.some(b => b.id === selectedBlockId)) {
+            const scratchpad = data.blocks.find(b => b.is_scratchpad === 1);
+            if (scratchpad) {
+              setSelectedBlockId(scratchpad.id);
+            } else {
+              setSelectedBlockId(data.blocks[0].id);
+            }
+          }
+        }
+      } catch (parseErr) {
+        throw new Error(`Failed to parse response: ${text.slice(0, 150) || "Empty response"}`);
       }
     } catch (err: any) {
       setError(err.message || "Failed to load details");
@@ -277,11 +291,26 @@ export default function FolderViewV2({
         })
       });
 
+      const text = await res.text();
       if (!res.ok) {
-        throw new Error("Could not create blocks.");
+        let errStr = "Could not create blocks.";
+        try {
+          const errJson = JSON.parse(text);
+          errStr = errJson.error || errStr;
+        } catch (e) {
+          if (text) {
+            errStr = text.slice(0, 150);
+          }
+        }
+        throw new Error(errStr);
       }
 
-      const createdBlock = await res.json();
+      let createdBlock;
+      try {
+        createdBlock = JSON.parse(text);
+      } catch (e) {
+        throw new Error(`Invalid response format from server: ${text.slice(0, 150) || "Empty response"}`);
+      }
       
       // Reset inputs & hide form
       setNewBlockName("");
