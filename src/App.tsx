@@ -126,11 +126,11 @@ export default function App() {
         };
 
         ws.onerror = () => {
-          console.error("[WS] Network connection error. Running polling sequence.");
+          console.warn("[WS] Network connection error. Running polling sequence.");
           setupPollingFallback();
         };
       } catch (e) {
-        console.error("[WS] Initial socket configuration failed:", e);
+        console.warn("[WS] Initial socket configuration failed:", e);
         setupPollingFallback();
       }
     };

@@ -9,6 +9,8 @@ import dotenv from "dotenv";
 import { CronlabState, LogEntry, Project, ResurfacedIdea } from "./src/types";
 import { getCompleteState, saveCompleteState, saveActiveSessionAndMetrics } from "./db";
 import { startScheduler } from "./scheduler";
+import dbV2 from "./db-v2";
+import { randomUUID } from "crypto";
 
 dotenv.config();
 
@@ -27,7 +29,7 @@ function updateLastActive() {
   lastActiveTime = Date.now();
 }
 
-wss.on("connection", (ws) => {
+ wss.on("connection", (ws) => {
   activeSockets.add(ws);
   updateLastActive();
   console.log(`[WS] Client connected. Total sockets: ${activeSockets.size}`);
@@ -40,6 +42,11 @@ wss.on("connection", (ws) => {
     activeSockets.delete(ws);
     updateLastActive();
     console.log(`[WS] Client disconnected. Total sockets: ${activeSockets.size}`);
+  });
+
+  ws.on("error", (err) => {
+    activeSockets.delete(ws);
+    console.warn(`[WS] Socket connection error: ${err.message}`);
   });
 });
 
@@ -705,6 +712,256 @@ app.post("/api/ideas/action", (req, res) => {
 
   writeDB(state, true);
   res.json({ success: true, item: idea });
+});
+
+// ==========================================
+// Phase 2: Cronlab v2 simplified API routes
+// ==========================================
+
+// 1. GET /api/v2/folders
+app.get("/api/v2/folders", (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        f.id, f.name, f.end_goal, f.completed, f.created_at, f.completed_at,
+        (SELECT text FROM logs l WHERE l.folder_id = f.id ORDER BY l.created_at DESC LIMIT 1) AS last_log,
+        COALESCE(
+          (SELECT MAX(created_at) FROM logs l WHERE l.folder_id = f.id),
+          f.created_at
+        ) AS last_touched
+      FROM folders f
+      ORDER BY 
+        f.completed ASC,
+        last_touched DESC
+    `;
+    const folders = dbV2.prepare(query).all();
+    res.json(folders);
+  } catch (error: any) {
+    console.error("[v2 API] Error fetching folders:", error);
+    res.status(500).json({ error: error.message || "Failed to fetch folders" });
+  }
+});
+
+// 2. POST /api/v2/folders
+app.post("/api/v2/folders", (req, res) => {
+  try {
+    const { name, end_goal } = req.body;
+    if (!name || !end_goal) {
+      return res.status(400).json({ error: "name and end_goal are required" });
+    }
+
+    const folderId = randomUUID();
+    const now = new Date().toISOString();
+
+    dbV2.transaction(() => {
+      // Create folder
+      dbV2.prepare(`
+        INSERT INTO folders (id, name, end_goal, completed, created_at, completed_at)
+        VALUES (?, ?, ?, 0, ?, NULL)
+      `).run(folderId, name, end_goal, now);
+
+      // Create initial Scratchpad block
+      const scratchpadId = `scratch-${randomUUID()}`;
+      dbV2.prepare(`
+        INSERT INTO blocks (id, folder_id, name, goal, position, is_scratchpad, created_at)
+        VALUES (?, ?, ?, NULL, 0, 1, ?)
+      `).run(scratchpadId, folderId, "Scratchpad", now);
+    })();
+
+    const folder = dbV2.prepare("SELECT * FROM folders WHERE id = ?").get(folderId);
+    res.status(201).json(folder);
+  } catch (error: any) {
+    console.error("[v2 API] Error creating folder:", error);
+    res.status(500).json({ error: error.message || "Failed to create folder" });
+  }
+});
+
+// 3. PATCH /api/v2/folders/:id/complete
+app.patch("/api/v2/folders/:id/complete", (req, res) => {
+  try {
+    const { id } = req.params;
+    const now = new Date().toISOString();
+
+    const result = dbV2.prepare(`
+      UPDATE folders SET completed = 1, completed_at = ? WHERE id = ?
+    `).run(now, id);
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: "Folder not found" });
+    }
+
+    const folder = dbV2.prepare("SELECT * FROM folders WHERE id = ?").get(id);
+    res.json(folder);
+  } catch (error: any) {
+    console.error("[v2 API] Error completing folder:", error);
+    res.status(500).json({ error: error.message || "Failed to complete folder" });
+  }
+});
+
+// 4. GET /api/v2/folders/:id
+app.get("/api/v2/folders/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    const folder = dbV2.prepare("SELECT * FROM folders WHERE id = ?").get(id) as any;
+    if (!folder) {
+      return res.status(404).json({ error: "Folder not found" });
+    }
+
+    // Retrieve blocks sorted: is_scratchpad DESC first (Scratchpad first), then position ASC
+    const blocks = dbV2.prepare(`
+      SELECT id, name, goal, position, is_scratchpad, created_at 
+      FROM blocks 
+      WHERE folder_id = ? 
+      ORDER BY is_scratchpad DESC, position ASC
+    `).all(id) as any[];
+
+    const tasksStmt = dbV2.prepare(`
+      SELECT id, block_id, text, done, done_at, position, created_at 
+      FROM tasks 
+      WHERE block_id = ? 
+      ORDER BY position ASC
+    `);
+
+    const logsStmt = dbV2.prepare(`
+      SELECT id, folder_id, block_id, text, created_at 
+      FROM logs 
+      WHERE block_id = ? 
+      ORDER BY created_at ASC
+    `);
+
+    for (const block of blocks) {
+      block.tasks = tasksStmt.all(block.id);
+      block.logs = logsStmt.all(block.id);
+    }
+
+    folder.blocks = blocks;
+    res.json(folder);
+  } catch (error: any) {
+    console.error("[v2 API] Error fetching folder details:", error);
+    res.status(500).json({ error: error.message || "Failed to fetch folder details" });
+  }
+});
+
+// 5. POST /api/v2/blocks
+app.post("/api/v2/blocks", (req, res) => {
+  try {
+    const { folder_id, name, goal } = req.body;
+    if (!folder_id || !name) {
+      return res.status(400).json({ error: "folder_id and name are required" });
+    }
+
+    const folderExists = dbV2.prepare("SELECT 1 FROM folders WHERE id = ?").get(folder_id);
+    if (!folderExists) {
+      return res.status(400).json({ error: "Folder does not exist" });
+    }
+
+    const maxPosRow = dbV2.prepare("SELECT MAX(position) as maxPos FROM blocks WHERE folder_id = ?").get(folder_id) as { maxPos: number | null };
+    const position = (maxPosRow?.maxPos ?? 0) + 1;
+
+    const id = randomUUID();
+    const now = new Date().toISOString();
+
+    dbV2.prepare(`
+      INSERT INTO blocks (id, folder_id, name, goal, position, is_scratchpad, created_at)
+      VALUES (?, ?, ?, ?, ?, 0, ?)
+    `).run(id, folder_id, name, goal || null, position, now);
+
+    const block = dbV2.prepare("SELECT * FROM blocks WHERE id = ?").get(id);
+    res.status(201).json(block);
+  } catch (error: any) {
+    console.error("[v2 API] Error creating block:", error);
+    res.status(500).json({ error: error.message || "Failed to create block" });
+  }
+});
+
+// 6. POST /api/v2/tasks
+app.post("/api/v2/tasks", (req, res) => {
+  try {
+    const { block_id, text } = req.body;
+    if (!block_id || !text) {
+      return res.status(400).json({ error: "block_id and text are required" });
+    }
+
+    const blockExists = dbV2.prepare("SELECT 1 FROM blocks WHERE id = ?").get(block_id);
+    if (!blockExists) {
+      return res.status(400).json({ error: "Block does not exist" });
+    }
+
+    const maxPosRow = dbV2.prepare("SELECT MAX(position) as maxPos FROM tasks WHERE block_id = ?").get(block_id) as { maxPos: number | null };
+    const position = (maxPosRow?.maxPos ?? 0) + 1;
+
+    const id = randomUUID();
+    const now = new Date().toISOString();
+
+    dbV2.prepare(`
+      INSERT INTO tasks (id, block_id, text, done, done_at, position, created_at)
+      VALUES (?, ?, ?, 0, NULL, ?, ?)
+    `).run(id, block_id, text, position, now);
+
+    const task = dbV2.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
+    res.status(201).json(task);
+  } catch (error: any) {
+    console.error("[v2 API] Error creating task:", error);
+    res.status(500).json({ error: error.message || "Failed to create task" });
+  }
+});
+
+// 7. PATCH /api/v2/tasks/:id/toggle
+app.patch("/api/v2/tasks/:id/toggle", (req, res) => {
+  try {
+    const { id } = req.params;
+    const task = dbV2.prepare("SELECT done FROM tasks WHERE id = ?").get(id) as { done: number } | undefined;
+    if (!task) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    const newDone = task.done === 1 ? 0 : 1;
+    const doneAt = newDone === 1 ? new Date().toISOString() : null;
+
+    dbV2.prepare(`
+      UPDATE tasks SET done = ?, done_at = ? WHERE id = ?
+    `).run(newDone, doneAt, id);
+
+    const updatedTask = dbV2.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
+    res.json(updatedTask);
+  } catch (error: any) {
+    console.error("[v2 API] Error toggling task:", error);
+    res.status(500).json({ error: error.message || "Failed to toggle task" });
+  }
+});
+
+// 8. POST /api/v2/logs
+app.post("/api/v2/logs", (req, res) => {
+  try {
+    const { folder_id, block_id, text } = req.body;
+    if (!folder_id || !block_id || !text) {
+      return res.status(400).json({ error: "folder_id, block_id and text are required" });
+    }
+
+    const folderExists = dbV2.prepare("SELECT 1 FROM folders WHERE id = ?").get(folder_id);
+    if (!folderExists) {
+      return res.status(400).json({ error: "Folder does not exist" });
+    }
+
+    const blockExists = dbV2.prepare("SELECT 1 FROM blocks WHERE id = ?").get(block_id);
+    if (!blockExists) {
+      return res.status(400).json({ error: "Block does not exist" });
+    }
+
+    const id = randomUUID();
+    const now = new Date().toISOString();
+
+    dbV2.prepare(`
+      INSERT INTO logs (id, folder_id, block_id, text, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(id, folder_id, block_id, text, now);
+
+    const log = dbV2.prepare("SELECT * FROM logs WHERE id = ?").get(id);
+    res.status(201).json(log);
+  } catch (error: any) {
+    console.error("[v2 API] Error creating log entry:", error);
+    res.status(500).json({ error: error.message || "Failed to create log entry" });
+  }
 });
 
 // Serve frontend assets in production / dev middleware setup
